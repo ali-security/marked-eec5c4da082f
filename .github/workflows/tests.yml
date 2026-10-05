@@ -1,9 +1,11 @@
 name: "Tests"
 on:
-  pull_request:
-  push:
-    branches:
-      - master
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Jasmine --filter pattern; empty runs the full suite'
+        required: false
+        default: ''
 
 jobs:
   Test:
@@ -12,6 +14,7 @@ jobs:
       matrix:
         node_version: ['lts/*', 'node']
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout Code
         uses: actions/checkout@v2
@@ -22,13 +25,14 @@ jobs:
       - name: Install Dependencies
         run: npm ci
       - name: Run Unit Tests 👩🏽‍💻
-        run: npm run test:unit
+        run: npm run test:unit ${{ inputs.test-filter && format('-- --filter="{0}"', inputs.test-filter) || '' }}
       - name: Run Spec Tests 👩🏽‍💻
-        run: npm run test:specs
+        run: npm run test:specs ${{ inputs.test-filter && format('-- --filter="{0}"', inputs.test-filter) || '' }}
 
   Lint:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout Code
         uses: actions/checkout@v2
@@ -39,32 +43,43 @@ jobs:
 
   Release:
     needs: [Test, Lint]
-    if: |
-      github.ref == 'refs/heads/master' &&
-      github.event.repository.fork == false
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout Code
         uses: actions/checkout@v2
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '14.17.0'
       - name: Install Dependencies
         run: npm ci
       - name: Build 🗜️
         run: |
-          npm run build
+          # rollup.config*.js stamps new Date().getFullYear() into the banner; pin the clock to the 2.0.6 release date
+          sudo apt-get update && sudo apt-get install -y faketime
+          faketime '2021-05-27 16:00:00' npm run build
           if ! git diff --quiet; then
             git config --global user.email "<>"
             git config --global user.name "MarkedJS bot"
             git commit -am "🗜️ build [skip ci]"
           fi
-      - name: Release 🎉
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npx semantic-release
+      - name: Pack 📦
+        run: |
+          mkdir -p dist
+          npm pack
+          mv marked-*.tgz dist/
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: marked-npm-package
+          path: dist/*.tgz
+          if-no-files-found: error
 
   Skip:
     if: contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Skip CI 🚫
         run: echo skip ci
